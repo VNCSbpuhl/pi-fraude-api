@@ -1,10 +1,11 @@
 import pandas as pd
 import joblib
 import json
-import numpy as np  # <-- IMPORTANTE
+import numpy as np
 from fastapi import FastAPI
 from pydantic import BaseModel
 from typing import List
+from fastapi.middleware.cors import CORSMiddleware  # <-- 1. IMPORTAÇÃO NOVA
 
 # 1. Inicializa o aplicativo FastAPI
 app = FastAPI(
@@ -13,7 +14,21 @@ app = FastAPI(
     version="1.0"
 )
 
-# 2. Carrega os artefatos salvos (modelo, scaler, colunas)
+# ==================================================================
+# 2. HABILITAR O CORS (BLOCO NOVO)
+# Isso diz à API para aceitar requisições de qualquer origem ("*")
+# ==================================================================
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Permite todas as origens (inseguro para produção, perfeito para demo)
+    allow_credentials=True,
+    allow_methods=["*"],  # Permite todos os métodos (POST, GET, etc.)
+    allow_headers=["*"],  # Permite todos os cabeçalhos
+)
+# ==================================================================
+
+
+# 3. Carrega os artefatos salvos (modelo, scaler, colunas)
 try:
     model = joblib.load('models/fraud_classifier.pkl')
     scaler = joblib.load('scalers/amount_scaler.pkl')
@@ -29,7 +44,7 @@ except FileNotFoundError as e:
     feature_columns = []
 
 
-# 3. Define a estrutura de dados de entrada (Request Body)
+# 4. Define a estrutura de dados de entrada (Request Body)
 class Transaction(BaseModel):
     Time: float
     V1: float
@@ -75,7 +90,7 @@ class Transaction(BaseModel):
             }
         }
 
-# 4. Define o endpoint de predição
+# 5. Define o endpoint de predição
 @app.post("/predict")
 def predict_fraud(transaction: Transaction):
     """
@@ -85,55 +100,36 @@ def predict_fraud(transaction: Transaction):
     if not model or not scaler or not feature_columns:
         return {"error": "Modelo não carregado. Verifique os logs do servidor."}
 
-    # 4.1. Converte os dados de entrada Pydantic para um DataFrame do Pandas
+    # 5.1. Converte os dados de entrada Pydantic para um DataFrame do Pandas
     input_data = pd.DataFrame([transaction.dict()])
 
-    # 4.2. **Aplicar o MESMO pré-processamento do treinamento**
+    # 5.2. **Aplicar o MESMO pré-processamento do treinamento**
     try:
         
-        # ==================================================================
-        # INÍCIO DA CORREÇÃO: Replicar a engenharia de features do 'Time'
-        # Assumindo que 'Time' está em segundos
-        
-        # Extrai o valor do 'Time' (vem como um DataFrame de 1 linha)
         time_seconds = input_data['Time'].values[0]
         
-        # Criar features de hora (ciclo de 24h)
-        # (23.0 para o ciclo 0-23)
         hour = (time_seconds // 3600) % 24
         input_data['hour_sin'] = np.sin(2 * np.pi * hour / 23.0) 
         input_data['hour_cos'] = np.cos(2 * np.pi * hour / 23.0) 
         
-        # Criar features de dia (assumindo ciclo de 7 dias da semana)
-        # (6.0 para o ciclo 0-6)
         day_of_week = (time_seconds // 86400) % 7 
         input_data['day_sin'] = np.sin(2 * np.pi * day_of_week / 6.0) 
         input_data['day_cos'] = np.cos(2 * np.pi * day_of_week / 6.0) 
         
-        # FIM DA CORREÇÃO
-        # ==================================================================
-
-        # Aplica o scaler na coluna 'Amount'
         input_data['Amount_scaled'] = scaler.transform(input_data[['Amount']])
         
-        # Seleciona apenas as colunas que o modelo espera
-        # Agora o input_data DEVE ter todas as colunas listadas em feature_columns
         final_input_data = input_data[feature_columns]
 
     except KeyError as e:
-        # Se der KeyError de novo, é porque as colunas em feature_columns estão erradas
-        return {"error": f"Erro de pré-processamento (KeyError): {e}. Verifique se 'feature_columns.json' corresponde ao seu processo."}
+        return {"error": f"Erro de pré-processamento (KeyError): {e}."}
     except Exception as e:
         return {"error": f"Erro no pré-processamento: {e}"}
 
-    # 4.3. Fazer a predição
+    # 5.3. Fazer a predição
     try:
         prediction = model.predict(final_input_data)
-        
-        # CORREÇÃO DE BUG: Usar predict_proba para pegar as probabilidades
         prediction_proba = model.predict_proba(final_input_data) 
         
-        # Pega o primeiro (e único) resultado
         result = int(prediction[0])
         probability_fraud = float(prediction_proba[0][1]) # Probabilidade de ser classe 1 (Fraude)
 
