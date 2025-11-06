@@ -1,6 +1,6 @@
 // !!!!!!!!!!!!!!!!!!! IMPORTANTE !!!!!!!!!!!!!!!!!!!
-// TROQUE PELA URL QUE O GOOGLE CLOUD RUN TE DEU
-const API_URL = "https://api-fraude-xxxxxxxx-uc.a.run.app/predict";
+// Sua URL do Render (já está correta)
+const API_URL = "https://pi-fraude-api-vncs.onrender.com/predict";
 // !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
 // Templates de dados (baseados nos que testamos)
@@ -13,14 +13,21 @@ const baseLegitData = {
   "V25": 0.6032, "V26": 0.1085, "V27": -0.0405, "V28": -0.0114, "Amount": 2.28
 };
 
+// ==================================================================
+// NOVA TRANSAÇÃO DE FRAUDE (EXEMPLO GARANTIDO DO KAGGLE)
+// ==================================================================
 const baseFraudData = {
-  "Time": 406, "V1": -2.3122, "V2": 1.9519, "V3": -1.6098, "V4": 3.9979,
-  "V5": -0.5221, "V6": -1.4265, "V7": -2.5373, "V8": 1.3916, "V9": -2.7700,
-  "V10": -2.7722, "V11": 3.2020, "V12": -2.8999, "V13": -0.5952, "V14": -4.2892,
-  "V15": 0.3897, "V16": -1.1407, "V17": -2.8300, "V18": -0.0168, "V19": 0.4169,
-  "V20": 0.1269, "V21": 0.5172, "V22": -0.0350, "V23": -0.4652, "V24": 0.3201,
-  "V25": 0.0445, "V26": 0.1778, "V27": 0.2611, "V28": -0.1432, "Amount": 0
+    "Time": 472,
+    "V1": -3.043540624, "V2": -3.157307121, "V3": 1.08846278, "V4": 2.288643618,
+    "V5": 1.35980513, "V6": -1.064823159, "V7": 0.325574365, "V8": -0.067793653,
+    "V9": -0.270952836, "V10": -0.838586565, "V11": -0.414575448, "V12": -0.50314086,
+    "V13": 0.676501545, "V14": -1.692028933, "V15": 2.000634839, "V16": 0.666779696,
+    "V17": -0.41018649, "V18": 0.92311537, "V19": -0.083501487, "V20": 1.378151613,
+    "V21": 0.661695925, "V22": 0.435477265, "V23": 1.375965743, "V24": -0.293803152,
+    "V25": 0.279797532, "V26": -0.145361715, "V27": -0.252773464, "V28": 0.035764225,
+    "Amount": 529.0
 };
+// ==================================================================
 
 // Seleciona os elementos da tela
 const btnLegit = document.getElementById("btnLegit");
@@ -33,51 +40,69 @@ btnLegit.onclick = () => simulateTransaction(baseLegitData);
 btnFraud.onclick = () => simulateTransaction(baseFraudData);
 
 // Função para simular os dados e parecerem "reais"
-function getSimulatedData(baseData) {
-    // Cria uma cópia dos dados base
-    let newData = { ...baseData }; 
-    
-    // Altera o 'Amount' e 'Time' para parecer uma nova transação
-    // Math.random() * (max - min) + min
-    newData.Amount = parseFloat((Math.random() * (2000 - 5) + 5).toFixed(2));
-    newData.Time = baseData.Time + Math.floor(Math.random() * 10000);
-    
-    return newData;
-}
-
+// (Esta é a versão 2, que envia o Amount original)
 async function simulateTransaction(baseData) {
-    const transactionData = getSimulatedData(baseData);
     
-    // 1. Adiciona um item "pendente" ao feed
+    // 1. Cria os dados "falsos" para mostrar na tela
+    const simulatedAmount = (baseData.Amount === 529.0) // Se for a nossa fraude
+        ? 529.0 // Mostra o valor real da fraude
+        : parseFloat((Math.random() * (1000 - 5) + 5).toFixed(2)); // Senão, mostra um valor aleatório
+        
+    const simulatedTime = baseData.Time + Math.floor(Math.random() * 10000);
+
+    // 2. Cria os dados "reais" para enviar à API
+    let transactionDataToSend = { ...baseData };
+    transactionDataToSend.Amount = baseData.Amount; // Usa o Amount ORIGINAL
+    transactionDataToSend.Time = simulatedTime;
+
+    // 3. Mostra o valor "falso" na tela
     const li = document.createElement("li");
-    li.textContent = `[PENDENTE] Nova Transação de R$ ${transactionData.Amount}...`;
-    liveFeedList.prepend(li); // Adiciona no topo da lista
+    li.textContent = `[PENDENTE] Nova Transação de R$ ${simulatedAmount}...`;
+    liveFeedList.prepend(li); 
     
     try {
+        // 4. Envia os dados "reais" para a API
         const response = await fetch(API_URL, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(transactionData)
+            body: JSON.stringify(transactionDataToSend) 
         });
         
+        if (response.status === 503) {
+            li.textContent = `[ACORDANDO API] O servidor gratuito estava dormindo. Tentando novamente...`;
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            return simulateTransaction(baseData); 
+        }
+
         const result = await response.json();
         
-        // 2. Atualiza o item com o resultado da API
-        if (result.prediction_label === "Fraude") {
-            li.textContent = `[ALERTA] Transação de R$ ${transactionData.Amount}. Prob: ${(result.probability_fraud * 100).toFixed(2)}%`;
+        // Debug: log da resposta da API
+        console.log("Resposta da API:", result);
+        
+        // Verifica se há erro na resposta
+        if (result.error) {
+            li.textContent = `[ERRO] ${result.error}`;
             li.className = "fraud";
-            
-            // Adiciona na lista de alertas
+            return;
+        }
+        
+        // 5. Verifica se é fraude usando prediction (0 ou 1) ou prediction_label
+        // prediction: 0 = Legítimo, 1 = Fraude
+        const isFraud = result.prediction === 1 || result.prediction_label === "Fraude";
+        
+        if (isFraud) {
+            li.textContent = `[ALERTA] Transação de R$ ${simulatedAmount}. Prob: ${(result.probability_fraud * 100).toFixed(2)}%`;
+            li.className = "fraud";
             const alertLi = li.cloneNode(true);
             fraudAlertList.prepend(alertLi);
             
         } else {
-            li.textContent = `[APROVADA] Transação de R$ ${transactionData.Amount}.`;
+            li.textContent = `[APROVADA] Transação de R$ ${simulatedAmount}.`;
             li.className = "legit";
         }
         
     } catch (error) {
-        li.textContent = `[ERRO API] Falha ao processar R$ ${transactionData.Amount}.`;
+        li.textContent = `[ERRO API] Falha ao processar R$ ${simulatedAmount}.`;
         li.className = "fraud";
     }
 }

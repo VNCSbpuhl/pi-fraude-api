@@ -127,6 +127,22 @@ def predict_fraud(transaction: Transaction):
 
     # 5.3. Fazer a predição
     try:
+        # Workaround para incompatibilidade de versão do scikit-learn
+        # Versões novas do scikit-learn tentam acessar monotonic_cst que não existe em modelos antigos
+        # Adiciona o atributo se não existir (compatibilidade com versões antigas)
+        if hasattr(model, 'estimators_'):
+            for estimator in model.estimators_:
+                if hasattr(estimator, 'tree_'):
+                    tree = estimator.tree_
+                    # Adiciona monotonic_cst se não existir (para compatibilidade com versões novas)
+                    if not hasattr(tree, 'monotonic_cst'):
+                        # Cria um array vazio do tipo correto para compatibilidade
+                        try:
+                            # Cria um array de zeros com o número de features
+                            tree.monotonic_cst = np.array([0] * tree.n_features, dtype=np.int32)
+                        except:
+                            pass
+        
         prediction = model.predict(final_input_data)
         prediction_proba = model.predict_proba(final_input_data) 
         
@@ -138,8 +154,16 @@ def predict_fraud(transaction: Transaction):
             "prediction_label": "Fraude" if result == 1 else "Legítimo",
             "probability_fraud": probability_fraud
         }
+    except AttributeError as e:
+        # Erro específico de incompatibilidade de versão
+        error_msg = str(e)
+        if 'monotonic_cst' in error_msg:
+            return {
+                "error": "Erro de compatibilidade do modelo. O modelo foi treinado com scikit-learn 1.3.2, mas o servidor está usando uma versão diferente. Por favor, reinstale as dependências com: pip install scikit-learn==1.3.2"
+            }
+        return {"error": f"Erro na predição (AttributeError): {error_msg}"}
     except Exception as e:
-        return {"error": f"Erro na predição: {e}"}
+        return {"error": f"Erro na predição: {str(e)}"}
 
 # Ponto de "boas-vindas" para testar se a API está no ar
 @app.get("/")
